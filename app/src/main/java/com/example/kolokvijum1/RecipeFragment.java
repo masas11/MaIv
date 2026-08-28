@@ -1,16 +1,21 @@
 package com.example.kolokvijum1;
 
+import android.Manifest;
 import android.content.Context;
 import android.content.Intent;
 import android.content.IntentFilter;
+import android.content.pm.PackageManager;
 import android.os.Bundle;
 import android.view.LayoutInflater;
 import android.view.View;
 import android.view.ViewGroup;
 import android.widget.ImageView;
 
+import androidx.activity.result.ActivityResultLauncher;
+import androidx.activity.result.contract.ActivityResultContracts;
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
+import androidx.core.content.ContextCompat;
 import androidx.fragment.app.Fragment;
 import androidx.recyclerview.widget.LinearLayoutManager;
 import androidx.recyclerview.widget.RecyclerView;
@@ -29,6 +34,22 @@ public class RecipeFragment extends Fragment {
     private ImageView ivRecipeImage;
 
     private RecipeBroadcastReceiver recipeReceiver;
+    private android.content.BroadcastReceiver cameraAllowedReceiver;
+
+    private ActivityResultLauncher<String> cameraPermissionLauncher;
+
+    @Override
+    public void onCreate(@Nullable Bundle savedInstanceState) {
+        super.onCreate(savedInstanceState);
+
+        // launcher za trazenje dozvole mora biti registrovan pre nego sto se fragment pokrene
+        cameraPermissionLauncher = registerForActivityResult(
+                new ActivityResultContracts.RequestPermission(),
+                isGranted -> {
+                    // ne radimo nista posebno ovde, servis ce sam detektovati da je dozvola data
+                }
+        );
+    }
 
     @Nullable
     @Override
@@ -49,7 +70,6 @@ public class RecipeFragment extends Fragment {
             dialog.setListener(recipe -> {
                 adapter.addRecipe(recipe);
                 recyclerView.scrollToPosition(recipeList.size() - 1);
-                ivRecipeImage.setVisibility(View.VISIBLE);
 
                 Intent intent = new Intent(ACTION_RECIPE_ADDED);
                 intent.putExtra(EXTRA_PREP_TIME, recipe.getPrepTimeMinutes());
@@ -58,15 +78,35 @@ public class RecipeFragment extends Fragment {
             dialog.show(getParentFragmentManager(), "AddRecipeDialog");
         });
 
+        // trazimo dozvolu za kameru ako je jos nemamo
+        if (ContextCompat.checkSelfPermission(requireContext(), Manifest.permission.CAMERA)
+                != PackageManager.PERMISSION_GRANTED) {
+            cameraPermissionLauncher.launch(Manifest.permission.CAMERA);
+        }
+
+        // pokrecemo servis koji svake minute proverava dozvolu
+        requireContext().startService(new Intent(requireContext(), CameraCheckService.class));
+
         return view;
     }
 
     @Override
     public void onResume() {
         super.onResume();
+
         recipeReceiver = new RecipeBroadcastReceiver();
-        IntentFilter filter = new IntentFilter(ACTION_RECIPE_ADDED);
-        requireContext().registerReceiver(recipeReceiver, filter);
+        requireContext().registerReceiver(recipeReceiver, new IntentFilter(ACTION_RECIPE_ADDED));
+
+        cameraAllowedReceiver = new android.content.BroadcastReceiver() {
+            @Override
+            public void onReceive(Context context, Intent intent) {
+                ivRecipeImage.setVisibility(View.VISIBLE);
+            }
+        };
+        requireContext().registerReceiver(
+                cameraAllowedReceiver,
+                new IntentFilter(CameraCheckService.ACTION_CAMERA_ALLOWED)
+        );
     }
 
     @Override
@@ -74,6 +114,9 @@ public class RecipeFragment extends Fragment {
         super.onPause();
         if (recipeReceiver != null) {
             requireContext().unregisterReceiver(recipeReceiver);
+        }
+        if (cameraAllowedReceiver != null) {
+            requireContext().unregisterReceiver(cameraAllowedReceiver);
         }
     }
 }
